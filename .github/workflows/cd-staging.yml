@@ -43,7 +43,7 @@ jobs:
           fetch-depth: 0
 
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host:     ${{ vars.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -93,7 +93,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: n8n health :5678
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host:     ${{ vars.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -107,7 +107,7 @@ jobs:
             exit 1
 
       - name: Gateway health :5001
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host:     ${{ vars.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -121,7 +121,7 @@ jobs:
             exit 1
 
       - name: PostgreSQL + pgvector + memory schema
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host:     ${{ vars.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -145,7 +145,7 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host:     ${{ vars.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -163,7 +163,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Rollback to previous SHA
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host:     ${{ vars.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
