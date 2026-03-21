@@ -1,0 +1,116 @@
+# Dependabot Auto-Merge - Chief of Staff
+# Patch (tous types) + GitHub Actions minor → auto-merge après CI vert
+# Minor / Major → approve uniquement, merge manuel requis
+
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Permissions minimales au niveau workflow — renforcées au niveau job si besoin
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  auto-merge:
+    name: "Auto-Merge"
+    runs-on: ubuntu-latest
+    # Filtre immédiat : uniquement les PRs Dependabot
+    if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a  # v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attendre le Quality Gate — agrège lint + secret-scan + security + smoke-test
+      - name: Wait for CI
+        id: wait
+        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be  # v1.2.0
+        with:
+          token:          ${{ secrets.GITHUB_TOKEN }}
+          checkName:      "Quality Gate"
+          ref:            ${{ github.event.pull_request.head.sha }}
+          timeoutSeconds: 1500
+          intervalSeconds: 15
+
+      # CI échoué ou timeout → commentaire + fail
+      - name: Block if CI fails
+        if: steps.wait.outputs.conclusion != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "**CI checks failed or timed out**
+          Status: \`${{ steps.wait.outputs.conclusion }}\`
+          Fix the issues and push again to re-trigger auto-merge."
+          exit 1
+
+      # RÈGLE 1 : Patch (tous types) → auto-merge
+      - name: Auto-merge patch updates
+        if: |
+          steps.wait.outputs.conclusion == 'success' &&
+          steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review "${{ github.event.pull_request.number }}" --approve \
+            --body "Auto-approved: patch update ✅"
+          gh pr merge  "${{ github.event.pull_request.number }}" --auto --squash
+
+      # RÈGLE 2 : GitHub Actions minor → auto-merge
+      # (condition séparée pour éviter le double-merge avec règle 1)
+      - name: Auto-merge GitHub Actions minor updates
+        if: |
+          steps.wait.outputs.conclusion == 'success' &&
+          steps.metadata.outputs.dependency-type == 'github_actions' &&
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review "${{ github.event.pull_request.number }}" --approve \
+            --body "Auto-approved: GitHub Actions minor update ✅"
+          gh pr merge  "${{ github.event.pull_request.number }}" --auto --squash
+
+      # RÈGLE 3 : Minor (hors GitHub Actions) → approve uniquement
+      - name: Approve minor updates (no auto-merge)
+        if: |
+          steps.wait.outputs.conclusion == 'success' &&
+          steps.metadata.outputs.dependency-type != 'github_actions' &&
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review "${{ github.event.pull_request.number }}" --approve \
+            --body "CI passed — minor update, **merge manuel recommandé**.
+          📦 \`${{ steps.metadata.outputs.dependency-names }}\`"
+
+      # RÈGLE 4 : Major → approve uniquement
+      - name: Approve major updates (no auto-merge)
+        if: |
+          steps.wait.outputs.conclusion == 'success' &&
+          steps.metadata.outputs.update-type == 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review "${{ github.event.pull_request.number }}" --approve \
+            --body "CI passed — **MAJOR update, merge manuel requis**.
+          📦 \`${{ steps.metadata.outputs.dependency-names }}\`
+          - [ ] Vérifier les breaking changes
+          - [ ] Tester localement
+          - [ ] Merger manuellement"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "Update type : ${{ steps.metadata.outputs.update-type }}"
+          echo "Dep type    : ${{ steps.metadata.outputs.dependency-type }}"
+          echo "CI status   : ${{ steps.wait.outputs.conclusion }}"

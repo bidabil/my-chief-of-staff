@@ -1,0 +1,3 @@
+# Shared directory for n8n
+# This directory is mounted to /data/shared in the n8n container
+# Use this for files that need to be shared between the host and n8n

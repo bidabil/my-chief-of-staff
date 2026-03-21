@@ -1,0 +1,289 @@
+{
+  "createdAt": "2026-03-11T00:00:00.000Z",
+  "updatedAt": "2026-03-11T00:00:00.000Z",
+  "id": "chiefMorningBriefing",
+  "name": "Morning Briefing",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "node-telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 400],
+      "webhookId": "morning-briefing-webhook",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBotCredential",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Écoute les messages entrants sur le bot Telegram"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Briefing 7h00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 160],
+      "notes": "Déclenche le briefing matinal proactif à 7h00 chaque jour"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message.text }}",
+        "options": {
+          "systemMessage": "Tu es le Chief of Staff de l'utilisateur. Tu es proactif, concis et orienté action.\nRéponds toujours en français sauf demande explicite.\nAujourd'hui nous sommes le {{ $now.format('dddd D MMMM YYYY') }}."
+        }
+      },
+      "id": "node-llm-chain",
+      "name": "Chief of Staff LLM",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [480, 400],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Génère mon briefing du matin.",
+        "options": {
+          "systemMessage": "Tu es le Chief of Staff de l'utilisateur. Chaque matin à 7h, tu envoies un briefing proactif.\nAujourd'hui nous sommes le {{ $now.format('dddd D MMMM YYYY') }}.\nGénère un briefing concis avec :\n- 🎯 Une priorité clé pour aujourd'hui\n- 📋 Un rappel ou point d'attention de la semaine\n- 💡 Une pensée ou conseil motivant\nRéponds en français. Sois bref et percutant (3 paragraphes max)."
+        }
+      },
+      "id": "node-morning-brief-llm",
+      "name": "Morning Brief LLM",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [480, 160]
+    },
+    {
+      "parameters": {
+        "model": "deepseek-r1",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1024
+        }
+      },
+      "id": "node-deepseek-model",
+      "name": "DeepSeek via Gateway",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [480, 600],
+      "credentials": {
+        "openAiApi": {
+          "id": "chiefGatewayOpenAI01",
+          "name": "1min-Gateway (DeepSeek)"
+        }
+      },
+      "notes": "Pointe sur http://gateway:5001 — remplace Ollama"
+    },
+    {
+      "parameters": {
+        "model": "deepseek-r1",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1024
+        }
+      },
+      "id": "node-deepseek-model-brief",
+      "name": "DeepSeek Morning Brief",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [240, 280],
+      "credentials": {
+        "openAiApi": {
+          "id": "chiefGatewayOpenAI01",
+          "name": "1min-Gateway (DeepSeek)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "chief-of-staff",
+        "contextWindowLength": 10
+      },
+      "id": "node-postgres-memory",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.1,
+      "position": [640, 600],
+      "credentials": {
+        "postgres": {
+          "id": "chiefPostgresDB01",
+          "name": "Chief DB (Postgres)"
+        }
+      },
+      "notes": "Conserve l'historique des échanges dans PostgreSQL (table n8n_chat_histories)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node-telegram-send",
+      "name": "Répondre sur Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBotCredential",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node-morning-brief-send",
+      "name": "Envoyer Briefing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, 160],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBotCredential",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Envoie le briefing matinal à TELEGRAM_CHAT_ID (ton chat perso)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "⚠️ Une erreur est survenue. Veuillez réessayer dans quelques instants.",
+        "additionalFields": {}
+      },
+      "id": "node-error-reply",
+      "name": "Erreur — Répondre Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, 560],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBotCredential",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Chief of Staff LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Briefing 7h00": {
+      "main": [
+        [
+          {
+            "node": "Morning Brief LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chief of Staff LLM": {
+      "main": [
+        [
+          {
+            "node": "Répondre sur Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Erreur — Répondre Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Morning Brief LLM": {
+      "main": [
+        [
+          {
+            "node": "Envoyer Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek via Gateway": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Chief of Staff LLM",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Morning Brief": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Morning Brief LLM",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Chief of Staff LLM",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": ["chief-of-staff", "telegram", "briefing", "memory"]
+}

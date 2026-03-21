@@ -1,0 +1,25 @@
+# ============================================================
+# Pre-commit — Chief of Staff
+# ============================================================
+# Installation :
+#   pip install pre-commit
+#   pre-commit install
+# ============================================================
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ["--unsafe"]   # --unsafe requis pour les tags YAML custom (n8n, anchors)
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+
+exclude: |
+  (?x)^(
+    \.git/|shared/
+  )$

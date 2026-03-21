@@ -1,0 +1,72 @@
+# ============================================================
+# Dependabot Configuration - Chief of Staff
+# ============================================================
+
+version: 2
+
+updates:
+  # ============================================================
+  # GITHUB ACTIONS
+  # ============================================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "ci-cd"
+    reviewers:
+      - "bidabil"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    groups:
+      github-actions-all:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ============================================================
+  # DOCKER IMAGES
+  # Tracked directly from docker-compose.yml
+  # ============================================================
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+    reviewers:
+      - "bidabil"
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+    groups:
+      docker-base-images:
+        patterns:
+          - "postgres*"
+          - "pgvector*"
+          - "n8nio*"
+          - "caddy*"
+        update-types:
+          - "minor"
+          - "patch"
+      docker-gateway:
+        patterns:
+          - "billelattafi*"
+        update-types:
+          - "minor"
+          - "patch"
+

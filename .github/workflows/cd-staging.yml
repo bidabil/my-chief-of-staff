@@ -1,0 +1,220 @@
+# CD Staging Pipeline - Chief of Staff
+# CI → Deploy (SSH) → Smoke Tests → Rollback → Notify (Telegram)
+
+name: CD - Staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths-ignore: ["**.md", "docs/**", ".github/ISSUE_TEMPLATE/**", "LICENSE"]
+
+concurrency:
+  group: cd-staging-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: "CI"
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+    with:
+      skip_tests: false
+      upload_artifacts: true
+
+  deploy:
+    name: "Deploy Staging"
+    needs: ci
+    if: needs.ci.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: staging
+      url: https://${{ vars.STAGING_HOST }}
+    outputs:
+      deployed: ${{ steps.set-outputs.outputs.deployed }}
+      version:  ${{ steps.set-outputs.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        with:
+          host:     ${{ vars.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     22
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.STAGING_PATH }}"
+
+            # Capture current SHA before any change (used by rollback)
+            grep -qxF ".prev_sha" .gitignore 2>/dev/null || echo ".prev_sha" >> .gitignore
+            git rev-parse HEAD > .prev_sha
+
+            # Deploy exact CI-validated commit (avoids push-between-CI-and-deploy race)
+            git fetch origin
+            git reset --hard "${{ github.sha }}"
+
+            [ -f .env ] || cp .env.example .env
+
+            # Validate required vars (strip inline comments, quotes, whitespace)
+            MISSING=""
+            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+              val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
+              [[ -z "$val" || "$val" == your-* ]] && MISSING="${MISSING} ${var}"
+            done
+            [ -n "$MISSING" ] && { echo "❌ Missing vars:${MISSING}"; exit 1; }
+
+            docker compose pull --quiet
+            docker compose up -d --wait --wait-timeout 120
+
+            ACTUAL=$(git rev-parse HEAD)
+            [[ "${{ github.sha }}" == "$ACTUAL" ]] || { echo "❌ SHA mismatch: got $ACTUAL"; exit 1; }
+            echo "✅ Deployed $ACTUAL"
+
+      - name: Set outputs
+        id: set-outputs
+        run: |
+          echo "deployed=true"                            >> $GITHUB_OUTPUT
+          echo "version=${{ needs.ci.outputs.version }}" >> $GITHUB_OUTPUT
+          echo "## Staging — \`${{ needs.ci.outputs.version }}\` (\`${{ needs.ci.outputs.sha_short }}\`) ✅" >> $GITHUB_STEP_SUMMARY
+
+  smoke-test:
+    name: "Smoke Tests"
+    needs: deploy
+    if: needs.deploy.outputs.deployed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: n8n health :5678
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        with:
+          host:     ${{ vars.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     22
+          script: |
+            for i in $(seq 1 8); do
+              curl -sf http://localhost:5678/healthz > /dev/null 2>&1 && exit 0
+              sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
+            done
+            exit 1
+
+      - name: Gateway health :5001
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        with:
+          host:     ${{ vars.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     22
+          script: |
+            for i in $(seq 1 8); do
+              curl -sf http://localhost:5001/health > /dev/null 2>&1 && exit 0
+              sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
+            done
+            exit 1
+
+      - name: PostgreSQL + pgvector + memory schema
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        with:
+          host:     ${{ vars.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     22
+          script: |
+            cd "${{ secrets.STAGING_PATH }}"
+            PG_USER=$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || echo 'chief')
+            PG_DB=$(grep -E '^POSTGRES_DB=' .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || echo 'chief_db')
+            docker compose exec -T postgres pg_isready -U "$PG_USER" || exit 1
+            docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -tAc \
+              "SELECT extname FROM pg_extension WHERE extname='vector';" | grep -q vector || exit 1
+            docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -tAc \
+              "SELECT schema_name FROM information_schema.schemata WHERE schema_name='memory';" | grep -q memory || exit 1
+
+      - name: Gateway API /v1/models (non-blocking)
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 \
+            "http://${{ vars.STAGING_HOST }}:5001/v1/models" 2>/dev/null || echo "000")
+          [[ "$STATUS" == "200" || "$STATUS" == "401" ]] || echo "⚠️ /v1/models HTTP $STATUS"
+
+      - name: Dump logs on failure
+        if: failure()
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        with:
+          host:     ${{ vars.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     22
+          script: |
+            docker compose -f "${{ secrets.STAGING_PATH }}/docker-compose.yml" logs --no-color
+
+  # ── ROLLBACK ──────────────────────────────────────────────────
+  rollback-check:
+    name: "Rollback"
+    needs: smoke-test
+    if: needs.smoke-test.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Rollback to previous SHA
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2
+        with:
+          host:     ${{ vars.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     22
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.STAGING_PATH }}"
+            PREV_SHA=$(cat .prev_sha 2>/dev/null || echo "")
+            [ -z "$PREV_SHA" ] && { echo "❌ No previous SHA — cannot rollback"; exit 1; }
+            git fetch origin
+            git reset --hard "$PREV_SHA"
+            # No pull in rollback: reuse existing images (no code/image mismatch)
+            docker compose up -d --wait --wait-timeout 180
+            CURRENT=$(git rev-parse HEAD)
+            [[ "$CURRENT" == "$PREV_SHA" ]] || { echo "❌ Rollback SHA mismatch: got $CURRENT"; exit 1; }
+            echo "✅ Rolled back to $(git rev-parse --short HEAD)"
+
+  notify:
+    name: "Notify"
+    needs: [ci, deploy, smoke-test, rollback-check]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          CI="${{ needs.ci.result }}"
+          DEPLOY="${{ needs.deploy.result }}"
+          SMOKE="${{ needs.smoke-test.result }}"
+          ROLLBACK="${{ needs.rollback-check.result }}"
+
+          if   [[ "$SMOKE"    == "success" ]];                                then EMOJI="✅"; MSG="Staging deployed & smoke tests passed"
+          elif [[ "$ROLLBACK" == "success" ]];                                then EMOJI="🔄"; MSG="Smoke tests failed — automatic rollback performed"
+          elif [[ "$DEPLOY"   == "success" && "$SMOKE" == "failure" ]];       then EMOJI="🚨"; MSG="CRITICAL: smoke tests + rollback failed — manual intervention required"
+          elif [[ "$CI"       == "failure" ]];                                then EMOJI="❌"; MSG="CI failed — deployment cancelled"
+          else                                                                     EMOJI="❌"; MSG="Staging deployment failed"
+          fi
+
+          TICK='`'; VERSION="${{ needs.deploy.outputs.version }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT="${EMOJI} *CD Staging — chief-of-staff*"$'\n'
+          TEXT+="Version: ${TICK}${VERSION}${TICK}"$'\n'
+          TEXT+="${MSG}"$'\n'
+          TEXT+="[View Run](${RUN_URL})"
+
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"${TEXT}\",\"parse_mode\":\"Markdown\",\"disable_web_page_preview\":true}")
+          [ "$HTTP" = "200" ] && echo "Telegram sent" || echo "Telegram HTTP $HTTP (non-blocking)"

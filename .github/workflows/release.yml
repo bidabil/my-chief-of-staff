@@ -1,0 +1,80 @@
+# Release Pipeline - Chief of Staff
+# Calcule le prochain numéro de version semver, crée le tag git,
+# génère une GitHub Release et notifie sur Telegram.
+# Le tag produit peut ensuite être passé directement à CD Production.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        type: choice
+        options: [patch, minor, major]
+        required: true
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # Création du tag et de la GitHub Release
+
+jobs:
+  release:
+    name: "Create Release"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        run: |
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          IFS='.' read -r MAJ MIN PAT <<< "${LAST#v}"
+          case "${{ inputs.bump }}" in
+            major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;
+            minor) MIN=$((MIN+1)); PAT=0 ;;
+            patch) PAT=$((PAT+1)) ;;
+          esac
+          TAG="v${MAJ}.${MIN}.${PAT}"
+          echo "tag=${TAG}"      >> $GITHUB_OUTPUT
+          echo "previous=${LAST}" >> $GITHUB_OUTPUT
+          echo "## Release — \`${TAG}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Previous: \`${LAST}\` | Bump: ${{ inputs.bump }} | By: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create tag & GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$TAG" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PREV="${{ steps.version.outputs.previous }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          TICK='`'
+          TEXT="🏷️ *Release — chief-of-staff*"$'\n'
+          TEXT+="${TICK}${PREV}${TICK} → ${TICK}${TAG}${TICK} | By: ${{ github.actor }}"$'\n'
+          TEXT+="[View Release](${RELEASE_URL})"
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"${TEXT}\",\"parse_mode\":\"Markdown\",\"disable_web_page_preview\":true}")
+          [ "$HTTP" = "200" ] && echo "Telegram sent" || echo "Telegram HTTP $HTTP (non-blocking)"
