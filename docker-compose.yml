@@ -61,6 +61,8 @@ services:
     restart: unless-stopped
     environment:
       - ONE_MIN_AI_API_KEY=${ONE_MIN_AI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5678}
       - PERMIT_MODELS_FROM_SUBSET_ONLY=${PERMIT_MODELS_FROM_SUBSET_ONLY:-False}
       - RATELIMIT_ENABLED=${RATELIMIT_ENABLED:-False}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
