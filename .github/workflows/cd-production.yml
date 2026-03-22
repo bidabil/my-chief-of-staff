@@ -88,7 +88,8 @@ jobs:
     needs: [validate]
     if: |
       always() && !cancelled() &&
-      needs.validate.result == 'success'
+      needs.validate.result == 'success' &&
+      vars.PRODUCTION_HOST != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
