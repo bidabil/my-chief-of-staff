@@ -54,7 +54,7 @@ services:
   # Using v1.0.0 for stability. Check for newer versions at:
   # https://hub.docker.com/r/billelattafi/1min-gateway/tags
   gateway:
-    image: billelattafi/1min-gateway:v1.0.0
+    image: billelattafi/1min-gateway:latest
     hostname: gateway
     container_name: gateway
     networks: ['chief-of-staff']
