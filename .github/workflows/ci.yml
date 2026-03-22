@@ -154,7 +154,7 @@ jobs:
           for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET; do
             grep -qE "^${var}=" .env.example || { echo "❌ Missing in .env.example: $var"; MISSING=true; }
           done
-          [ "$MISSING" = "true" ] && exit 1
+          if [ "$MISSING" = "true" ]; then exit 1; fi
 
       - name: dotenv-linter
         run: dotenv-linter .env.example
@@ -175,7 +175,7 @@ jobs:
               jq -e ".$field" "$WF" > /dev/null 2>&1 || { echo "❌ Missing field: $field"; FAILED=true; }
             done
           fi
-          [ "$FAILED" = "true" ] && exit 1
+          if [ "$FAILED" = "true" ]; then exit 1; fi
 
       - name: SQL structure
         run: |
@@ -185,7 +185,7 @@ jobs:
           for pattern in "CREATE EXTENSION.*vector" "CREATE SCHEMA.*memory" "CREATE TABLE.*documents" "USING hnsw"; do
             grep -qE "$pattern" "$SQL" || { echo "❌ Not found: $pattern"; FAILED=true; }
           done
-          [ "$FAILED" = "true" ] && exit 1
+          if [ "$FAILED" = "true" ]; then exit 1; fi
 
   # ── SECRET SCAN ───────────────────────────────────────────────
   secret-scan:
@@ -361,7 +361,8 @@ jobs:
               echo "✅ $job: $r"
             fi
           done
-          [ "$FAILED" = "true" ] && exit 1 || echo "All checks passed or skipped"
+          if [ "$FAILED" = "true" ]; then exit 1; fi
+          echo "All checks passed or skipped"
 
   # ── NOTIFY ────────────────────────────────────────────────────
   notify:
