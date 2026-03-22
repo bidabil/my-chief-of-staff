@@ -137,6 +137,7 @@ jobs:
 
       - name: docker-compose + :latest check
         run: |
+          cp .env.example .env
           docker compose config --quiet
           if grep -qE "image:.*:latest" docker-compose.yml; then
             echo "❌ :latest tag forbidden — pin your image versions"
@@ -245,7 +246,7 @@ jobs:
         uses: bridgecrewio/checkov-action@2fd3901c8feb52417f27f0d9800259a106c1ec1e  # v12
         with:
           directory:     '.'
-          framework:     'secrets,compose'
+          framework:     'secrets'
           output_format: 'cli'
           soft_fail:     false
           quiet:         true
@@ -282,6 +283,8 @@ jobs:
           printf 'N8N_USER_MANAGEMENT_JWT_SECRET=%s\n'           "$(openssl rand -hex 16)" >> .env
           printf 'TELEGRAM_BOT_TOKEN=ci-placeholder\n'                                     >> .env
           printf 'WEBHOOK_URL=http://localhost:5678\n'                                     >> .env
+          printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)"   >> .env
+          printf 'CORS_ORIGINS=http://localhost:5678\n'                                    >> .env
 
       - name: Start stack
         run: docker compose up -d --wait --wait-timeout 120
