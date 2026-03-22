@@ -1,21 +1,19 @@
 # CD Production Pipeline - Chief of Staff
-# Manuel uniquement (workflow_dispatch) — approbation GitHub Environment requise
-# Vérifie staging → déploie SHA exact → smoke tests → rollback auto si échec
+# Auto : push sur main → déploie le SHA exact → smoke tests → rollback auto si échec
+# Manuel : workflow_dispatch pour forcer un SHA/tag spécifique
 
 name: CD - Production
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to deploy (git tag ex: v1.2.3, SHA, or 'latest')"
+        description: "Version à déployer (tag ex: v1.2.3, SHA, ou 'latest')"
         type: string
         default: "latest"
         required: false
-      skip_staging_check:
-        description: "Skip staging validation (emergency only)"
-        type: boolean
-        default: false
 
 concurrency:
   group: cd-production-${{ github.workflow }}
@@ -43,6 +41,18 @@ jobs:
         id: resolve
         run: |
           VERSION="${{ github.event.inputs.version }}"
+
+          # Push event: deploy the pushed commit directly (no version input)
+          if [[ -z "$VERSION" ]]; then
+            SHA="${{ github.sha }}"
+            SHA_SHORT=$(git rev-parse --short "$SHA")
+            echo "sha=${SHA}"             >> $GITHUB_OUTPUT
+            echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+            echo "version=${SHA_SHORT}"   >> $GITHUB_OUTPUT
+            echo "## Production — \`${SHA_SHORT}\` (push)" >> $GITHUB_STEP_SUMMARY
+            echo "Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
 
           # Resolve 'latest' to the most recent git tag
           if [[ "$VERSION" == "latest" ]]; then
@@ -72,46 +82,13 @@ jobs:
           echo "## Production — \`${VERSION}\` (\`${SHA_SHORT}\`)" >> $GITHUB_STEP_SUMMARY
           echo "Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
 
-  # ── STAGING CHECK ────────────────────────────────────────────
-  staging-check:
-    name: "Staging Health Check"
-    needs: validate
-    if: github.event.inputs.skip_staging_check != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      # Les deux checks passent par SSH — staging n'a pas besoin d'être exposé publiquement
-      - name: n8n + Gateway health
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
-        with:
-          host:     ${{ vars.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key:      ${{ secrets.STAGING_SSH_KEY }}
-          port:     22
-          script: |
-            for i in $(seq 1 6); do
-              curl -sf http://localhost:5678/healthz > /dev/null 2>&1 && break
-              sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
-            done
-            curl -sf http://localhost:5678/healthz > /dev/null 2>&1 || { echo "- staging n8n: ❌"; exit 1; }
-            echo "- staging n8n: ✅"
-
-            for i in $(seq 1 6); do
-              curl -sf http://localhost:5001/health > /dev/null 2>&1 && break
-              sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
-            done
-            curl -sf http://localhost:5001/health > /dev/null 2>&1 || { echo "- staging gateway: ❌"; exit 1; }
-            echo "- staging gateway: ✅"
-
   # ── DEPLOY PRODUCTION ────────────────────────────────────────
   deploy:
     name: "Deploy Production"
-    needs: [validate, staging-check]
+    needs: [validate]
     if: |
       always() && !cancelled() &&
-      needs.validate.result == 'success' &&
-      (needs.staging-check.result == 'success' ||
-       needs.staging-check.result == 'skipped')
+      needs.validate.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -268,7 +245,7 @@ jobs:
   # ── NOTIFY ────────────────────────────────────────────────────
   notify:
     name: "Notify"
-    needs: [validate, staging-check, deploy, smoke-test, rollback-check]
+    needs: [validate, deploy, smoke-test, rollback-check]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -281,13 +258,11 @@ jobs:
           DEPLOY="${{ needs.deploy.result }}"
           SMOKE="${{ needs.smoke-test.result }}"
           ROLLBACK="${{ needs.rollback-check.result }}"
-          STAGING="${{ needs.staging-check.result }}"
           VERSION="${{ needs.validate.outputs.version }}"
 
           if   [[ "$SMOKE"    == "success" ]];                                   then EMOJI="✅"; MSG="Production deployed & smoke tests passed"
           elif [[ "$ROLLBACK" == "success" ]];                                   then EMOJI="🔄"; MSG="Smoke tests failed — automatic rollback performed"
           elif [[ "$DEPLOY"   == "success" && "$SMOKE" == "failure" ]];          then EMOJI="🚨"; MSG="CRITICAL: smoke tests + rollback failed — manual intervention required"
-          elif [[ "$STAGING"  == "failure" ]];                                   then EMOJI="❌"; MSG="Staging health check failed — deployment cancelled"
           elif [[ "$DEPLOY"   == "failure" ]];                                   then EMOJI="❌"; MSG="Deployment failed"
           else                                                                        EMOJI="❌"; MSG="Pipeline failed"
           fi
