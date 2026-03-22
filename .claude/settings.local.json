@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(curl -sf \"https://api.github.com/repos/actions/checkout/git/ref/tags/v4\")",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d[''''object''''][''''sha''''], d[''''object''''][''''type'''']\\)\")",
-      "Bash(\"C:\\\\Users\\\\Billel\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python3.exe\" -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d[''''object''''][''''sha''''], d[''''object''''][''''type'''']\\)\")"
-    ]
-  }
-}
