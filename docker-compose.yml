@@ -119,12 +119,6 @@ services:
         condition: service_healthy
       n8n-import:
         condition: service_completed_successfully
-    healthcheck:
-      test: ['CMD-SHELL', 'node -e "require(\"http\").get(\"http://localhost:5678/healthz\",r=>process.exit(r.statusCode===200?0:1)).on(\"error\",()=>process.exit(1))"']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
 
   # ─────────────────────────────────────────
   # BACKUP (PostgreSQL — daily dumps, 7d/4w/6m rotation)
@@ -177,4 +171,4 @@ services:
       - caddy_config:/config
     depends_on:
       n8n:
-        condition: service_healthy
+        condition: service_started
