@@ -9,7 +9,7 @@ networks:
   chief-of-staff:
 
 x-n8n: &service-n8n
-  image: n8nio/n8n:2.12.2
+  image: n8nio/n8n:2.13.2
   networks: ['chief-of-staff']
   environment:
     - DB_TYPE=postgresdb
