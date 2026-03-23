@@ -1,9 +1,6 @@
-# CI Pipeline - Chief of Staff
-# Philosophie : fail fast | outils standards | smoke test réel | defense-in-depth
-# Trivy v0.35.0 embarque Trivy v0.69.3 (post-incident supply chain 01/03/2026)
-# Source : https://github.com/aquasecurity/trivy/discussions/10265
-
 name: CI
+# Trivy v0.35.0 = Trivy v0.69.3 (post-incident supply chain 01/03/2026)
+# https://github.com/aquasecurity/trivy/discussions/10265
 
 on:
   workflow_dispatch:
@@ -14,12 +11,8 @@ on:
         type: boolean
         default: false
     outputs:
-      version:
-        description: "Version built"
-        value: ${{ jobs.init.outputs.version }}
-      sha_short:
-        description: "Short SHA"
-        value: ${{ jobs.init.outputs.sha_short }}
+      version:   { value: "${{ jobs.init.outputs.version }}" }
+      sha_short: { value: "${{ jobs.init.outputs.sha_short }}" }
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -38,7 +31,6 @@ permissions:
   contents: read
 
 jobs:
-  # ── INIT ──────────────────────────────────────────────────────
   init:
     name: "Initialize"
     runs-on: ubuntu-latest
@@ -59,22 +51,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set variables
-        id: vars
+      - id: vars
         run: |
-          echo "sha_short=$(git rev-parse --short HEAD)"                       >> $GITHUB_OUTPUT
-          echo "is_release=${{ startsWith(github.ref, 'refs/tags/v') }}"      >> $GITHUB_OUTPUT
-          echo "is_main=${{ github.ref == 'refs/heads/main' }}"               >> $GITHUB_OUTPUT
-          echo "is_draft=${{ github.event.pull_request.draft }}"              >> $GITHUB_OUTPUT
+          echo "sha_short=$(git rev-parse --short HEAD)"                  >> $GITHUB_OUTPUT
+          echo "is_release=${{ startsWith(github.ref, 'refs/tags/v') }}" >> $GITHUB_OUTPUT
+          echo "is_main=${{ github.ref == 'refs/heads/main' }}"          >> $GITHUB_OUTPUT
+          echo "is_draft=${{ github.event.pull_request.draft }}"         >> $GITHUB_OUTPUT
           if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}"                          >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           else
-            GIT_VERSION=$(git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)
-            echo "version=${GIT_VERSION}"                                      >> $GITHUB_OUTPUT
+            echo "version=$(git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           fi
 
-      - name: Detect changes
-        id: changes
+      - id: changes
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         with:
           filters: |
@@ -87,14 +76,6 @@ jobs:
               - 'shared/**'
               - '.env.example'
 
-      - name: Summary
-        run: |
-          echo "## CI — ${{ steps.vars.outputs.version }} (\`${{ steps.vars.outputs.sha_short }}\`)" >> $GITHUB_STEP_SUMMARY
-          echo "| Δ docker | Δ config | Draft |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|---------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ${{ steps.changes.outputs.docker }} | ${{ steps.changes.outputs.config }} | ${{ steps.vars.outputs.is_draft }} |" >> $GITHUB_STEP_SUMMARY
-
-  # ── LINT ──────────────────────────────────────────────────────
   lint:
     name: "Lint"
     needs: init
@@ -106,79 +87,66 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Cache tools
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         id: cache-tools
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ~/.local/bin
           key: tools-${{ runner.os }}-dotenv-4.0.0
 
-      - name: Install tools
-        if: steps.cache-tools.outputs.cache-hit != 'true'
-        env:
-          DOTENV_LINTER_VERSION: "4.0.0"
+      - if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.local/bin
           sudo apt-get install -y --no-install-recommends jq
-          curl -sSL "https://github.com/dotenv-linter/dotenv-linter/releases/download/v${DOTENV_LINTER_VERSION}/dotenv-linter-linux-x86_64.tar.gz" \
+          curl -sSL "https://github.com/dotenv-linter/dotenv-linter/releases/download/v4.0.0/dotenv-linter-linux-x86_64.tar.gz" \
             | tar -xz -C ~/.local/bin
 
-      - name: Add tools to PATH
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: docker-compose + :latest check
+      - name: docker-compose + no :latest
         run: |
           cp .env.example .env
           docker compose config --quiet
-          if grep -qE "image:.*:latest" docker-compose.yml; then
-            echo "❌ :latest tag forbidden — pin your image versions"
-            grep -E "image:.*:latest" docker-compose.yml
-            exit 1
-          fi
+          ! grep -qE "image:.*:latest" docker-compose.yml || { grep -E "image:.*:latest" docker-compose.yml; echo "❌ :latest forbidden"; exit 1; }
 
       - name: Required files & env vars
         run: |
-          MISSING=false
+          FAIL=false
           for f in docker-compose.yml .env.example postgres/init.sql; do
-            [ -f "$f" ] || { echo "❌ Missing: $f"; MISSING=true; }
+            [ -f "$f" ] || { echo "❌ Missing: $f"; FAIL=true; }
           done
           for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET; do
-            grep -qE "^${var}=" .env.example || { echo "❌ Missing in .env.example: $var"; MISSING=true; }
+            grep -qE "^${var}=" .env.example || { echo "❌ Missing in .env.example: $var"; FAIL=true; }
           done
-          if [ "$MISSING" = "true" ]; then exit 1; fi
+          [ "$FAIL" = "true" ] && exit 1; true
 
-      - name: dotenv-linter
-        run: dotenv-linter check .env.example
+      - run: dotenv-linter check .env.example
 
-      - name: n8n JSON + schema
+      - name: n8n JSON
         run: |
-          FAILED=false
+          FAIL=false
           for dir in n8n/demo-data/workflows n8n/demo-data/credentials; do
             [ -d "$dir" ] || continue
             for f in "$dir"/*.json; do
               [ -f "$f" ] || continue
-              jq -e . "$f" > /dev/null 2>&1 || { echo "❌ Invalid JSON: $(basename $f)"; FAILED=true; }
+              jq -e . "$f" > /dev/null || { echo "❌ Invalid JSON: $(basename $f)"; FAIL=true; }
             done
           done
           WF="n8n/demo-data/workflows/morning-briefing.json"
           if [ -f "$WF" ]; then
             for field in name nodes connections; do
-              jq -e ".$field" "$WF" > /dev/null 2>&1 || { echo "❌ Missing field: $field"; FAILED=true; }
+              jq -e ".$field" "$WF" > /dev/null || { echo "❌ Missing field: $field"; FAIL=true; }
             done
           fi
-          if [ "$FAILED" = "true" ]; then exit 1; fi
+          [ "$FAIL" = "true" ] && exit 1; true
 
       - name: SQL structure
         run: |
-          SQL="postgres/init.sql"
-          [ -f "$SQL" ] || { echo "❌ $SQL not found"; exit 1; }
-          FAILED=false
-          for pattern in "CREATE EXTENSION.*vector" "CREATE SCHEMA.*memory" "CREATE TABLE.*documents" "USING hnsw"; do
-            grep -qE "$pattern" "$SQL" || { echo "❌ Not found: $pattern"; FAILED=true; }
+          FAIL=false
+          for p in "CREATE EXTENSION.*vector" "CREATE SCHEMA.*memory" "CREATE TABLE.*documents" "USING hnsw"; do
+            grep -qE "$p" postgres/init.sql || { echo "❌ Not found: $p"; FAIL=true; }
           done
-          if [ "$FAILED" = "true" ]; then exit 1; fi
+          [ "$FAIL" = "true" ] && exit 1; true
 
-  # ── SECRET SCAN ───────────────────────────────────────────────
   secret-scan:
     name: "Secret Scan"
     needs: init
@@ -192,12 +160,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── SECURITY ──────────────────────────────────────────────────
   security:
     name: "Security"
     needs: init
@@ -214,10 +180,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Trivy config scan
-        # v0.35.0 = Trivy v0.69.3, première release post-incident supply chain 01/03/2026
-        # Source : https://github.com/aquasecurity/trivy/discussions/10265
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
           scan-type:      'config'
           scan-ref:       '.'
@@ -227,14 +190,12 @@ jobs:
           exit-code:      '1'
           ignore-unfixed: true
 
-      - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@dfad8f8ebc168f044d22d94180b54591ef6c0321  # v3
+      - uses: github/codeql-action/upload-sarif@dfad8f8ebc168f044d22d94180b54591ef6c0321  # v3
         if: always()
         with:
           sarif_file: 'trivy-config.sarif'
 
-      - name: Checkov
-        uses: bridgecrewio/checkov-action@2fd3901c8feb52417f27f0d9800259a106c1ec1e  # v12
+      - uses: bridgecrewio/checkov-action@2fd3901c8feb52417f27f0d9800259a106c1ec1e  # v12
         with:
           directory:     '.'
           framework:     'secrets'
@@ -242,7 +203,6 @@ jobs:
           soft_fail:     false
           quiet:         true
 
-  # ── SMOKE TEST ────────────────────────────────────────────────
   smoke-test:
     name: "Smoke Test"
     needs: init
@@ -255,76 +215,54 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Prepare test .env
+      - name: Prepare .env
         run: |
-          printf 'ONE_MIN_AI_API_KEY=ci-test-%s\n'              "$(openssl rand -hex 8)"  > .env
-          printf 'POSTGRES_PASSWORD=%s\n'                        "$(openssl rand -hex 16)" >> .env
-          printf 'POSTGRES_USER=chief\n'                                                   >> .env
-          printf 'POSTGRES_DB=chief_db\n'                                                  >> .env
-          printf 'N8N_ENCRYPTION_KEY=%s\n'                       "$(openssl rand -hex 16)" >> .env
-          printf 'N8N_USER_MANAGEMENT_JWT_SECRET=%s\n'           "$(openssl rand -hex 16)" >> .env
-          printf 'TELEGRAM_BOT_TOKEN=ci-placeholder\n'                                     >> .env
-          printf 'WEBHOOK_URL=http://localhost:5678\n'                                     >> .env
-          printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)"   >> .env
-          printf 'CORS_ORIGINS=http://localhost:5678\n'                                    >> .env
-          printf 'TELEGRAM_CHAT_ID=ci-placeholder\n'                                       >> .env
-
-      - name: Pull images
-        run: |
-          docker compose pull || {
-            echo "❌ Failed to pull images — check image names and registry access"
-            exit 1
-          }
+          printf 'ONE_MIN_AI_API_KEY=ci-test-%s\n'            "$(openssl rand -hex 8)"  > .env
+          printf 'POSTGRES_PASSWORD=%s\n'                      "$(openssl rand -hex 16)" >> .env
+          printf 'POSTGRES_USER=chief\nPOSTGRES_DB=chief_db\n'                          >> .env
+          printf 'N8N_ENCRYPTION_KEY=%s\n'                     "$(openssl rand -hex 16)" >> .env
+          printf 'N8N_USER_MANAGEMENT_JWT_SECRET=%s\n'         "$(openssl rand -hex 16)" >> .env
+          printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)" >> .env
+          printf 'TELEGRAM_BOT_TOKEN=ci-placeholder\nTELEGRAM_CHAT_ID=ci-placeholder\n' >> .env
+          printf 'WEBHOOK_URL=http://localhost:5678\nCORS_ORIGINS=http://localhost:5678\n' >> .env
 
       - name: Start stack
         run: |
-          docker compose up -d --wait --wait-timeout 120 || {
-            echo "=== GATEWAY LOGS ==="
-            docker compose logs gateway
-            echo "=== ALL LOGS ==="
-            docker compose logs
-            exit 1
-          }
+          docker compose pull
+          docker compose up -d --wait --wait-timeout 120 || { docker compose logs; exit 1; }
 
       - name: Healthcheck — PostgreSQL
         run: docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}"
 
-      - name: Healthcheck — 1min-gateway :5001
+      - name: Healthcheck — gateway :5001
         run: |
           for i in $(seq 1 8); do
-            curl -sf http://localhost:5001/ > /dev/null 2>&1 && exit 0
-            WAIT=$(( 2 ** i > 30 ? 30 : 2 ** i ))
-            sleep "$WAIT"
+            curl -sf --max-time 10 --connect-timeout 5 http://localhost:5001/ && exit 0
+            sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
           done
-          docker compose logs gateway && exit 1
+          docker compose logs gateway; exit 1
 
       - name: Healthcheck — n8n :5678
         run: |
           for i in $(seq 1 10); do
-            curl -sf --max-time 10 http://localhost:5678/healthz > /dev/null 2>&1 && exit 0
-            WAIT=$(( 2 ** i > 30 ? 30 : 2 ** i ))
-            sleep "$WAIT"
+            curl -sf --max-time 10 --connect-timeout 5 http://localhost:5678/healthz && exit 0
+            sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
           done
-          docker compose logs n8n && exit 1
+          docker compose logs n8n; exit 1
 
-      - name: Verify pgvector + memory schema
+      - name: pgvector + memory schema
         run: |
-          RESULT=$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}" \
-            -tAc "SELECT extname FROM pg_extension WHERE extname='vector';")
-          [ "$RESULT" = "vector" ] || { echo "❌ pgvector not installed"; exit 1; }
-          SCHEMA=$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}" \
-            -tAc "SELECT schema_name FROM information_schema.schemata WHERE schema_name='memory';")
-          [ "$SCHEMA" = "memory" ] || { echo "❌ memory schema not found"; exit 1; }
+          docker compose exec -T postgres psql -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}" -tAc \
+            "SELECT extname FROM pg_extension WHERE extname='vector';" | grep -q vector   || { echo "❌ pgvector missing"; exit 1; }
+          docker compose exec -T postgres psql -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}" -tAc \
+            "SELECT schema_name FROM information_schema.schemata WHERE schema_name='memory';" | grep -q memory || { echo "❌ memory schema missing"; exit 1; }
 
-      - name: Dump logs on failure
-        if: failure()
+      - if: failure()
         run: docker compose logs --no-color
 
-      - name: Teardown
-        if: always()
+      - if: always()
         run: docker compose down -v --remove-orphans
 
-  # ── QUALITY GATE ──────────────────────────────────────────────
   quality-gate:
     name: "Quality Gate"
     needs: [lint, secret-scan, security, smoke-test]
@@ -332,28 +270,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Evaluate results
-        run: |
-          declare -A results=(
-            [lint]="${{ needs.lint.result }}"
-            [secret-scan]="${{ needs.secret-scan.result }}"
-            [security]="${{ needs.security.result }}"
-            [smoke-test]="${{ needs.smoke-test.result }}"
-          )
-          FAILED=false
-          for job in "${!results[@]}"; do
-            r="${results[$job]}"
-            if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
-              echo "❌ $job: $r"
-              FAILED=true
-            else
-              echo "✅ $job: $r"
-            fi
+      - run: |
+          FAIL=false
+          for job in lint secret-scan security smoke-test; do
+            r=$(eval echo \${{ "needs.${job}.result" }})
+            [[ "$r" == "failure" || "$r" == "cancelled" ]] && { echo "❌ $job: $r"; FAIL=true; } || echo "✅ $job: $r"
           done
-          if [ "$FAILED" = "true" ]; then exit 1; fi
-          echo "All checks passed or skipped"
+          [ "$FAIL" = "true" ] && exit 1; echo "All checks passed or skipped"
 
-  # ── NOTIFY ────────────────────────────────────────────────────
   notify:
     name: "Notify"
     needs: [init, lint, secret-scan, security, smoke-test]
@@ -363,39 +287,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Build message
-        id: msg
-        run: |
-          LINT="${{ needs.lint.result }}"
-          SECRETS="${{ needs.secret-scan.result }}"
-          SEC="${{ needs.security.result }}"
-          SMOKE="${{ needs.smoke-test.result }}"
-          if [[ "$LINT" == "failure" || "$SECRETS" == "failure" || "$SEC" == "failure" || "$SMOKE" == "failure" ]]; then
-            echo "emoji=❌" >> $GITHUB_OUTPUT
-            echo "status=FAILED" >> $GITHUB_OUTPUT
-          elif [[ "$LINT" == "success" && "$SECRETS" != "failure" && "$SMOKE" == "success" ]]; then
-            echo "emoji=✅" >> $GITHUB_OUTPUT
-            echo "status=PASSED" >> $GITHUB_OUTPUT
-          else
-            echo "emoji=⚠️" >> $GITHUB_OUTPUT
-            echo "status=PARTIAL" >> $GITHUB_OUTPUT
-          fi
-          echo "run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_OUTPUT
-
-      - name: Send Telegram notification
+      - name: Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          TICK='`'
-          BRANCH="${{ github.ref_name }}"
-          SHA="${{ needs.init.outputs.sha_short }}"
-          TEXT="${{ steps.msg.outputs.emoji }} *CI — chief-of-staff*"$'\n'
-          TEXT+="Branch: ${TICK}${BRANCH}${TICK} | SHA: ${TICK}${SHA}${TICK}"$'\n'
-          TEXT+="Status: ${{ steps.msg.outputs.status }}"$'\n'
-          TEXT+="[View Run](${{ steps.msg.outputs.run_url }})"
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+          L="${{ needs.lint.result }}" S="${{ needs.secret-scan.result }}"
+          C="${{ needs.security.result }}" K="${{ needs.smoke-test.result }}"
+
+          if   [[ "$L" == "failure" || "$S" == "failure" || "$C" == "failure" || "$K" == "failure" ]]; then EMOJI="❌"; STATUS="FAILED"
+          elif [[ "$L" == "success" && "$S" != "failure" && "$K" == "success" ]];                       then EMOJI="✅"; STATUS="PASSED"
+          else                                                                                                EMOJI="⚠️"; STATUS="PARTIAL"
+          fi
+
+          T='`'
+          TEXT="${EMOJI} *CI — chief-of-staff*"$'\n'
+          TEXT+="Branch: ${T}${{ github.ref_name }}${T} | SHA: ${T}${{ needs.init.outputs.sha_short }}${T}"$'\n'
+          TEXT+="Status: ${STATUS}"$'\n'
+          TEXT+="[View Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
             -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"${TEXT}\",\"parse_mode\":\"Markdown\",\"disable_web_page_preview\":true}")
-          [ "$HTTP" = "200" ] && echo "Telegram sent" || echo "Telegram HTTP $HTTP (non-blocking)"
+          [ "$HTTP" = "200" ] && echo "Sent" || echo "HTTP $HTTP (non-blocking)"

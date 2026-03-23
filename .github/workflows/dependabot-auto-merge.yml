@@ -1,14 +1,11 @@
-# Dependabot Auto-Merge - Chief of Staff
-# Patch (tous types) + GitHub Actions minor → auto-merge après CI vert
-# Minor / Major → approve uniquement, merge manuel requis
-
 name: Dependabot Auto-Merge
+# patch (all) + GitHub Actions minor → auto-merge after green CI
+# minor (non-Actions) + major → approve only
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# Permissions minimales au niveau workflow — renforcées au niveau job si besoin
 permissions:
   contents: read
   pull-requests: read
@@ -17,7 +14,6 @@ jobs:
   auto-merge:
     name: "Auto-Merge"
     runs-on: ubuntu-latest
-    # Filtre immédiat : uniquement les PRs Dependabot
     if: github.actor == 'dependabot[bot]'
     permissions:
       contents: write
@@ -25,50 +21,49 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Fetch Dependabot metadata
-        id: metadata
+      - name: Reject PRs from forks
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "**Auto-merge disabled:** PR originates from a fork."
+          exit 1
+
+      - id: metadata
         uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a  # v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Attendre le Quality Gate — agrège lint + secret-scan + security + smoke-test
-      - name: Wait for CI
-        id: wait
+      - id: wait
         uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be  # v1.2.0
         with:
-          token:          ${{ secrets.GITHUB_TOKEN }}
-          checkName:      "Quality Gate"
-          ref:            ${{ github.event.pull_request.head.sha }}
-          timeoutSeconds: 1500
+          token:           ${{ secrets.GITHUB_TOKEN }}
+          checkName:       "Quality Gate"
+          ref:             ${{ github.event.pull_request.head.sha }}
+          timeoutSeconds:  1500
           intervalSeconds: 15
 
-      # CI échoué ou timeout → commentaire + fail
       - name: Block if CI fails
         if: steps.wait.outputs.conclusion != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr comment "${{ github.event.pull_request.number }}" \
-            --body "**CI checks failed or timed out**
-          Status: \`${{ steps.wait.outputs.conclusion }}\`
-          Fix the issues and push again to re-trigger auto-merge."
+            --body "**CI failed or timed out** (\`${{ steps.wait.outputs.conclusion }}\`) — fix and push to re-trigger."
           exit 1
 
-      # RÈGLE 1 : Patch (tous types) → auto-merge
-      - name: Auto-merge patch updates
+      - name: Auto-merge patch
         if: |
           steps.wait.outputs.conclusion == 'success' &&
           steps.metadata.outputs.update-type == 'version-update:semver-patch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr review "${{ github.event.pull_request.number }}" --approve \
-            --body "Auto-approved: patch update ✅"
+          gh pr review "${{ github.event.pull_request.number }}" --approve --body "Auto-approved: patch ✅"
           gh pr merge  "${{ github.event.pull_request.number }}" --auto --squash
 
-      # RÈGLE 2 : GitHub Actions minor → auto-merge
-      # (condition séparée pour éviter le double-merge avec règle 1)
-      - name: Auto-merge GitHub Actions minor updates
+      - name: Auto-merge Actions minor
         if: |
           steps.wait.outputs.conclusion == 'success' &&
           steps.metadata.outputs.dependency-type == 'github_actions' &&
@@ -76,12 +71,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr review "${{ github.event.pull_request.number }}" --approve \
-            --body "Auto-approved: GitHub Actions minor update ✅"
+          gh pr review "${{ github.event.pull_request.number }}" --approve --body "Auto-approved: Actions minor ✅"
           gh pr merge  "${{ github.event.pull_request.number }}" --auto --squash
 
-      # RÈGLE 3 : Minor (hors GitHub Actions) → approve uniquement
-      - name: Approve minor updates (no auto-merge)
+      - name: Approve minor (no auto-merge)
         if: |
           steps.wait.outputs.conclusion == 'success' &&
           steps.metadata.outputs.dependency-type != 'github_actions' &&
@@ -90,11 +83,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review "${{ github.event.pull_request.number }}" --approve \
-            --body "CI passed — minor update, **merge manuel recommandé**.
-          📦 \`${{ steps.metadata.outputs.dependency-names }}\`"
+            --body "CI passed — minor update, **manual merge recommended**. 📦 \`${{ steps.metadata.outputs.dependency-names }}\`"
 
-      # RÈGLE 4 : Major → approve uniquement
-      - name: Approve major updates (no auto-merge)
+      - name: Approve major (no auto-merge)
         if: |
           steps.wait.outputs.conclusion == 'success' &&
           steps.metadata.outputs.update-type == 'version-update:semver-major'
@@ -102,15 +93,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review "${{ github.event.pull_request.number }}" --approve \
-            --body "CI passed — **MAJOR update, merge manuel requis**.
-          📦 \`${{ steps.metadata.outputs.dependency-names }}\`
-          - [ ] Vérifier les breaking changes
-          - [ ] Tester localement
-          - [ ] Merger manuellement"
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "Update type : ${{ steps.metadata.outputs.update-type }}"
-          echo "Dep type    : ${{ steps.metadata.outputs.dependency-type }}"
-          echo "CI status   : ${{ steps.wait.outputs.conclusion }}"
+            --body "CI passed — **MAJOR update, manual merge required**. 📦 \`${{ steps.metadata.outputs.dependency-names }}\`
+          - [ ] Check breaking changes
+          - [ ] Test locally
+          - [ ] Merge manually"
