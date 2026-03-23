@@ -272,10 +272,13 @@ jobs:
     steps:
       - run: |
           FAIL=false
-          for job in lint secret-scan security smoke-test; do
-            r=$(eval echo \${{ "needs.${job}.result" }})
+          check() { local job=$1 r=$2
             [[ "$r" == "failure" || "$r" == "cancelled" ]] && { echo "❌ $job: $r"; FAIL=true; } || echo "✅ $job: $r"
-          done
+          }
+          check lint        "${{ needs.lint.result }}"
+          check secret-scan "${{ needs.secret-scan.result }}"
+          check security    "${{ needs.security.result }}"
+          check smoke-test  "${{ needs.smoke-test.result }}"
           [ "$FAIL" = "true" ] && exit 1; echo "All checks passed or skipped"
 
   notify:
