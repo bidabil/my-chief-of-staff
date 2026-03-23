@@ -13,10 +13,6 @@ on:
         description: "Skip tests (emergency only)"
         type: boolean
         default: false
-      upload_artifacts:
-        description: "Upload build artifacts"
-        type: boolean
-        default: true
     outputs:
       version:
         description: "Version built"
@@ -25,10 +21,10 @@ on:
         description: "Short SHA"
         value: ${{ jobs.init.outputs.sha_short }}
   pull_request:
-    branches: ["main", "develop"]
+    branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: ["main", "develop"]
+    branches: ["main"]
     tags: ["v*"]
     paths-ignore: ["**.md", "docs/**", ".github/ISSUE_TEMPLATE/**", "LICENSE"]
   schedule:
@@ -264,8 +260,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
-
       - name: Pull images
         run: |
           docker compose pull || {
@@ -285,6 +279,7 @@ jobs:
           printf 'WEBHOOK_URL=http://localhost:5678\n'                                     >> .env
           printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)"   >> .env
           printf 'CORS_ORIGINS=http://localhost:5678\n'                                    >> .env
+          printf 'TELEGRAM_CHAT_ID=ci-placeholder\n'                                        >> .env
 
       - name: Start stack
         run: |

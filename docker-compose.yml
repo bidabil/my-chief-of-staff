@@ -11,6 +11,11 @@ networks:
 x-n8n: &service-n8n
   image: n8nio/n8n:2.13.2
   networks: ['chief-of-staff']
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
   environment:
     - DB_TYPE=postgresdb
     - DB_POSTGRESDB_HOST=postgres
@@ -36,6 +41,11 @@ services:
     container_name: postgres
     networks: ['chief-of-staff']
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - POSTGRES_USER
       - POSTGRES_PASSWORD
@@ -51,14 +61,18 @@ services:
 
   # ─────────────────────────────────────────
   # 1MIN GATEWAY (OpenAI-compatible → DeepSeek)
-  # Using v1.0.0 for stability. Check for newer versions at:
   # https://hub.docker.com/r/billelattafi/1min-gateway/tags
   gateway:
-    image: billelattafi/1min-gateway:6c3a581
+    image: billelattafi/1min-gateway:v1.4.0
     hostname: gateway
     container_name: gateway
     networks: ['chief-of-staff']
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ONE_MIN_AI_API_KEY=${ONE_MIN_AI_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
@@ -136,6 +150,11 @@ services:
     container_name: backup
     networks: ['chief-of-staff']
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=${POSTGRES_USER}
@@ -164,6 +183,11 @@ services:
     container_name: caddy
     networks: ['chief-of-staff']
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "80:80"
       - "443:443"
