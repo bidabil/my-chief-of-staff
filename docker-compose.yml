@@ -9,7 +9,7 @@ networks:
   chief-of-staff:
 
 x-n8n: &service-n8n
-  image: n8nio/n8n:1.21.1
+  image: n8nio/n8n:2.12.2
   networks: ['chief-of-staff']
   environment:
     - DB_TYPE=postgresdb
@@ -119,6 +119,12 @@ services:
         condition: service_healthy
       n8n-import:
         condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:5678/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
   # ─────────────────────────────────────────
   # BACKUP (PostgreSQL — daily dumps, 7d/4w/6m rotation)
@@ -171,4 +177,4 @@ services:
       - caddy_config:/config
     depends_on:
       n8n:
-        condition: service_started
+        condition: service_healthy

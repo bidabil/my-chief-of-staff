@@ -1,0 +1,41 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Paris",
+  "schedule": ["every weekend"],
+
+  "packageRules": [
+    {
+      "description": "Auto-merge patch updates (low risk)",
+      "matchUpdateTypes": ["patch"],
+      "matchPackageNames": ["n8nio/n8n", "pgvector/pgvector", "caddy", "prodrigestivill/postgres-backup-local"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash"
+    },
+    {
+      "description": "Minor/major updates — PR only, no auto-merge",
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions — group all updates in one PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "automerge": false
+    }
+  ],
+
+  "docker-compose": {
+    "enabled": true,
+    "fileMatch": ["(^|/)docker-compose\\.yml$"]
+  },
+
+  "github-actions": {
+    "enabled": true
+  },
+
+  "prConcurrentLimit": 3,
+  "prCreation": "immediate",
+  "labels": ["dependencies"]
+}
