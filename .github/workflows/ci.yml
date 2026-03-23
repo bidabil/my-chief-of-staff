@@ -287,7 +287,14 @@ jobs:
           printf 'CORS_ORIGINS=http://localhost:5678\n'                                    >> .env
 
       - name: Start stack
-        run: docker compose up -d --wait --wait-timeout 120
+        run: |
+          docker compose up -d --wait --wait-timeout 120 || {
+            echo "=== GATEWAY LOGS ==="
+            docker compose logs gateway
+            echo "=== ALL LOGS ==="
+            docker compose logs
+            exit 1
+          }
 
       - name: Healthcheck — PostgreSQL
         run: docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}"
