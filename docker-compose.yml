@@ -63,7 +63,7 @@ services:
   # 1MIN GATEWAY (OpenAI-compatible → DeepSeek)
   # https://hub.docker.com/r/billelattafi/1min-gateway/tags
   gateway:
-    image: billelattafi/1min-gateway:v1.4.0
+    image: billelattafi/1min-gateway:6c3a581
     hostname: gateway
     container_name: gateway
     networks: ['chief-of-staff']

@@ -260,13 +260,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Pull images
-        run: |
-          docker compose pull || {
-            echo "❌ Failed to pull images — check image names and registry access"
-            exit 1
-          }
-
       - name: Prepare test .env
         run: |
           printf 'ONE_MIN_AI_API_KEY=ci-test-%s\n'              "$(openssl rand -hex 8)"  > .env
@@ -279,7 +272,14 @@ jobs:
           printf 'WEBHOOK_URL=http://localhost:5678\n'                                     >> .env
           printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)"   >> .env
           printf 'CORS_ORIGINS=http://localhost:5678\n'                                    >> .env
-          printf 'TELEGRAM_CHAT_ID=ci-placeholder\n'                                        >> .env
+          printf 'TELEGRAM_CHAT_ID=ci-placeholder\n'                                       >> .env
+
+      - name: Pull images
+        run: |
+          docker compose pull || {
+            echo "❌ Failed to pull images — check image names and registry access"
+            exit 1
+          }
 
       - name: Start stack
         run: |
