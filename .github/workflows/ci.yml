@@ -302,7 +302,7 @@ jobs:
       - name: Healthcheck — 1min-gateway :5001
         run: |
           for i in $(seq 1 8); do
-            curl -sf http://localhost:5001/health > /dev/null 2>&1 && exit 0
+            curl -sf http://localhost:5001/ > /dev/null 2>&1 && exit 0
             WAIT=$(( 2 ** i > 30 ? 30 : 2 ** i ))
             sleep "$WAIT"
           done
