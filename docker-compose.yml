@@ -26,6 +26,7 @@ x-n8n: &service-n8n
     - N8N_PERSONALIZATION_ENABLED=false
     - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
     - N8N_USER_MANAGEMENT_JWT_SECRET=${N8N_USER_MANAGEMENT_JWT_SECRET}
+    - N8N_RUNNERS_ENABLED=false
   env_file:
     - path: .env
       required: true
@@ -134,11 +135,11 @@ services:
       n8n-import:
         condition: service_completed_successfully
     healthcheck:
-      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:5678/healthz']
+      test: ["CMD-SHELL", "wget -q -T 5 -O - http://localhost:5678/healthz 2>/dev/null | grep -q '\"status\":\"ok\"' || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 60s
+      retries: 18
+      start_period: 25s
 
   # ─────────────────────────────────────────
   # BACKUP (PostgreSQL — daily dumps, 7d/4w/6m rotation)

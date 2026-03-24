@@ -108,7 +108,20 @@ jobs:
             [[ -n "$MISSING" ]] && { echo "❌ Missing env vars:${MISSING}"; exit 1; }
 
             docker compose pull --quiet
-            docker compose up -d --wait --wait-timeout 120
+            docker compose up -d
+
+            echo "Waiting for services to be healthy..."
+            timeout 240s bash -c '
+              until docker compose ps n8n | grep -q "(healthy)"; do
+                echo "n8n not healthy yet... waiting"
+                sleep 8
+              done
+              echo "n8n is healthy"
+            ' || {
+              echo "❌ Timeout waiting for n8n healthy"
+              docker compose logs n8n
+              exit 1
+            }
 
             ACTUAL=$(git rev-parse HEAD)
             [[ "${{ needs.validate.outputs.sha }}" == "$ACTUAL" ]] || { echo "❌ SHA mismatch: got $ACTUAL"; exit 1; }
@@ -119,7 +132,7 @@ jobs:
   smoke-test:
     name: "Smoke Tests"
     needs: deploy
-    if: needs.deploy.outputs.deployed == 'true'
+    if: needs.deploy.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

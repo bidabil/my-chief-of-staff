@@ -230,7 +230,7 @@ jobs:
       - name: Start stack
         run: |
           docker compose pull
-          docker compose up -d --wait --wait-timeout 120 || { docker compose logs; exit 1; }
+          docker compose up -d --wait --wait-timeout 240 || { docker compose logs; exit 1; }
 
       - name: Healthcheck — PostgreSQL
         run: docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}"

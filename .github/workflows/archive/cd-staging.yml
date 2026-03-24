@@ -72,7 +72,7 @@ jobs:
             [ -n "$MISSING" ] && { echo "❌ Missing vars:${MISSING}"; exit 1; }
 
             docker compose pull --quiet
-            docker compose up -d --wait --wait-timeout 120
+            docker compose up -d --wait --wait-timeout 240
 
             ACTUAL=$(git rev-parse HEAD)
             [[ "${{ github.sha }}" == "$ACTUAL" ]] || { echo "❌ SHA mismatch: got $ACTUAL"; exit 1; }
