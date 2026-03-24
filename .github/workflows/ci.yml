@@ -79,9 +79,12 @@ jobs:
   lint:
     name: "Lint"
     needs: init
+    # FIX C: workflow_dispatch force l'exécution même sans changements détectés
     if: |
       needs.init.outputs.is_draft != 'true' &&
-      (needs.init.outputs.changes_docker == 'true' || needs.init.outputs.changes_config == 'true')
+      (needs.init.outputs.changes_docker == 'true' ||
+       needs.init.outputs.changes_config == 'true' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -167,11 +170,13 @@ jobs:
   security:
     name: "Security"
     needs: init
+    # FIX C: workflow_dispatch force l'exécution même sans changements détectés
     if: |
       needs.init.outputs.is_draft != 'true' &&
       (needs.init.outputs.changes_docker == 'true' ||
        needs.init.outputs.changes_config == 'true' ||
-       github.event_name == 'schedule')
+       github.event_name == 'schedule' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -206,10 +211,13 @@ jobs:
   smoke-test:
     name: "Smoke Test"
     needs: init
+    # FIX C: workflow_dispatch force l'exécution même sans changements détectés
     if: |
       needs.init.outputs.is_draft != 'true' &&
       !inputs.skip_tests &&
-      (needs.init.outputs.changes_docker == 'true' || needs.init.outputs.changes_config == 'true')
+      (needs.init.outputs.changes_docker == 'true' ||
+       needs.init.outputs.changes_config == 'true' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -227,10 +235,12 @@ jobs:
           printf 'WEBHOOK_URL=http://localhost:5678\nCORS_ORIGINS=http://localhost:5678\n' >> .env
           printf 'DOMAIN=localhost\nACME_EMAIL=ci@test.local\n' >> .env
 
+      # FIX log n8n-import: --wait bloque sur les conteneurs one-shot (Exited 0)
+      # les étapes suivantes gèrent elles-mêmes l'attente via retry loops
       - name: Start stack
         run: |
           docker compose pull
-          docker compose up -d --wait --wait-timeout 240 || { docker compose logs; exit 1; }
+          docker compose up -d || { docker compose logs; exit 1; }
 
       - name: Healthcheck — PostgreSQL
         run: docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-chief}" -d "${POSTGRES_DB:-chief_db}"
@@ -245,11 +255,17 @@ jobs:
 
       - name: Healthcheck — n8n :5678
         run: |
-          for i in $(seq 1 10); do
-            curl -sf --max-time 10 --connect-timeout 5 http://localhost:5678/healthz && exit 0
-            sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
-          done
-          docker compose logs n8n; exit 1
+          timeout 300s bash -c '
+            until curl -sf --max-time 8 --connect-timeout 5 http://localhost:5678/healthz > /dev/null; do
+              echo "n8n not ready yet... waiting"
+              sleep 8
+            done
+            echo "✅ n8n is healthy"
+          ' || {
+            echo "❌ n8n timeout after 5min"
+            docker compose logs n8n --tail=200
+            exit 1
+          }
 
       - name: pgvector + memory schema
         run: |
@@ -299,9 +315,10 @@ jobs:
           L="${{ needs.lint.result }}" S="${{ needs.secret-scan.result }}"
           C="${{ needs.security.result }}" K="${{ needs.smoke-test.result }}"
 
+          # FIX D: security ($C) inclus dans la condition PASSED
           if   [[ "$L" == "failure" || "$S" == "failure" || "$C" == "failure" || "$K" == "failure" ]]; then EMOJI="❌"; STATUS="FAILED"
-          elif [[ "$L" == "success" && "$S" != "failure" && "$K" == "success" ]];                       then EMOJI="✅"; STATUS="PASSED"
-          else                                                                                                EMOJI="⚠️"; STATUS="PARTIAL"
+          elif [[ "$L" == "success" && "$S" != "failure" && "$C" != "failure" && "$K" == "success" ]]; then EMOJI="✅"; STATUS="PASSED"
+          else                                                                                               EMOJI="⚠️"; STATUS="PARTIAL"
           fi
 
           T='`'

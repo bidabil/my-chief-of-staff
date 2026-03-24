@@ -68,8 +68,6 @@ jobs:
     environment:
       name: production
       url: https://${{ vars.PRODUCTION_HOST }}
-    outputs:
-      deployed: ${{ steps.done.outputs.deployed }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
@@ -126,13 +124,11 @@ jobs:
             ACTUAL=$(git rev-parse HEAD)
             [[ "${{ needs.validate.outputs.sha }}" == "$ACTUAL" ]] || { echo "❌ SHA mismatch: got $ACTUAL"; exit 1; }
 
-      - id: done
-        run: echo "deployed=true" >> $GITHUB_OUTPUT
-
+  # FIX B: condition resserrée — smoke ne tourne que si deploy a réussi
   smoke-test:
     name: "Smoke Tests"
     needs: deploy
-    if: needs.deploy.result != 'cancelled'
+    if: needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -207,23 +203,25 @@ jobs:
             docker compose up -d --wait --wait-timeout 180
             [[ "$(git rev-parse HEAD)" == "$PREV" ]] || { echo "❌ SHA mismatch post-rollback"; exit 1; }
 
+      # FIX A: vérification de santé exécutée sur le runner (pas via SSH)
+      # $GITHUB_OUTPUT n'existe pas sur le serveur distant — le write était silencieusement perdu
       - name: Verify rollback health
         id: health
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
-        with:
-          host:            ${{ vars.PRODUCTION_HOST }}
-          username:        ${{ secrets.PRODUCTION_USER }}
-          key:             ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:            22
-          command_timeout: 120s
-          script: |
-            for i in $(seq 1 10); do
-              curl -sf --max-time 10 --connect-timeout 5 http://localhost:5001/       > /dev/null 2>&1 && \
-              curl -sf --max-time 10 --connect-timeout 5 http://localhost:5678/healthz > /dev/null 2>&1 && \
-              { echo "healthy=true" >> $GITHUB_OUTPUT; exit 0; }
-              sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
-            done
-            echo "healthy=false" >> $GITHUB_OUTPUT; exit 1
+        run: |
+          for i in $(seq 1 10); do
+            if ssh -o StrictHostKeyChecking=no \
+                 -o BatchMode=yes \
+                 -i <(echo "${{ secrets.PRODUCTION_SSH_KEY }}") \
+                 "${{ secrets.PRODUCTION_USER }}@${{ vars.PRODUCTION_HOST }}" \
+                 "curl -sf --max-time 10 --connect-timeout 5 http://localhost:5001/ > /dev/null 2>&1 && \
+                  curl -sf --max-time 10 --connect-timeout 5 http://localhost:5678/healthz > /dev/null 2>&1"; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
+          done
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          exit 1
 
   notify:
     name: "Notify"
