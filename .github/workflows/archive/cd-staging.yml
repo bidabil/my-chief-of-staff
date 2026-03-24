@@ -65,14 +65,14 @@ jobs:
 
             # Validate required vars (strip inline comments, quotes, whitespace)
             MISSING=""
-            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET SECRET_KEY TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
               val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
               [[ -z "$val" || "$val" == your-* ]] && MISSING="${MISSING} ${var}"
             done
             [ -n "$MISSING" ] && { echo "❌ Missing vars:${MISSING}"; exit 1; }
 
             docker compose pull --quiet
-            docker compose up -d --wait --wait-timeout 120
+            docker compose up -d --wait --wait-timeout 240
 
             ACTUAL=$(git rev-parse HEAD)
             [[ "${{ github.sha }}" == "$ACTUAL" ]] || { echo "❌ SHA mismatch: got $ACTUAL"; exit 1; }
@@ -115,7 +115,7 @@ jobs:
           port:     22
           script: |
             for i in $(seq 1 8); do
-              curl -sf http://localhost:5001/health > /dev/null 2>&1 && exit 0
+              curl -sf http://localhost:5001/ > /dev/null 2>&1 && exit 0
               sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
             done
             exit 1

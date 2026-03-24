@@ -4,4 +4,13 @@
 
 {$DOMAIN} {
     reverse_proxy n8n:5678
+
+    header {
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-XSS-Protection "0"
+        -Server
+    }
 }

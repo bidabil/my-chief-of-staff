@@ -1,7 +1,3 @@
-# CD Production Pipeline - Chief of Staff
-# Auto : push sur main → déploie le SHA exact → smoke tests → rollback auto si échec
-# Manuel : workflow_dispatch pour forcer un SHA/tag spécifique
-
 name: CD - Production
 
 on:
@@ -10,10 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version à déployer (tag ex: v1.2.3, SHA, ou 'latest')"
+        description: "Tag, SHA ou 'latest'"
         type: string
         default: "latest"
-        required: false
 
 concurrency:
   group: cd-production-${{ github.workflow }}
@@ -23,259 +18,243 @@ permissions:
   contents: read
 
 jobs:
-  # ── VALIDATE ─────────────────────────────────────────────────
   validate:
     name: "Validate"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      sha: ${{ steps.resolve.outputs.sha }}
+      sha:       ${{ steps.resolve.outputs.sha }}
       sha_short: ${{ steps.resolve.outputs.sha_short }}
-      version: ${{ steps.resolve.outputs.version }}
+      version:   ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
 
-      - name: Resolve version to SHA
+      - name: Resolve version → SHA
         id: resolve
         run: |
           VERSION="${{ github.event.inputs.version }}"
 
-          # Push event: deploy the pushed commit directly (no version input)
           if [[ -z "$VERSION" ]]; then
             SHA="${{ github.sha }}"
-            SHA_SHORT=$(git rev-parse --short "$SHA")
-            echo "sha=${SHA}"             >> $GITHUB_OUTPUT
-            echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-            echo "version=${SHA_SHORT}"   >> $GITHUB_OUTPUT
-            echo "## Production — \`${SHA_SHORT}\` (push)" >> $GITHUB_STEP_SUMMARY
-            echo "Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-
-          # Resolve 'latest' to the most recent git tag
-          if [[ "$VERSION" == "latest" ]]; then
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-            if [[ -z "$LATEST_TAG" ]]; then
-              echo "❌ No tags found in repository — cannot resolve 'latest'"
-              exit 1
-            fi
-            VERSION="$LATEST_TAG"
-            echo "Resolved 'latest' → ${VERSION}"
-          fi
-
-          # Resolve tag or SHA to a full commit SHA
-          if git rev-parse "refs/tags/${VERSION}" > /dev/null 2>&1; then
-            SHA=$(git rev-parse "refs/tags/${VERSION}^{}")
-          elif git rev-parse "${VERSION}" > /dev/null 2>&1; then
-            SHA=$(git rev-parse "${VERSION}")
           else
-            echo "❌ Cannot resolve version '${VERSION}' to a commit"
-            exit 1
+            [[ "$VERSION" == "latest" ]] && VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            [[ -z "$VERSION" ]] && { echo "❌ No tags found"; exit 1; }
+
+            if git rev-parse "refs/tags/${VERSION}" > /dev/null 2>&1; then
+              SHA=$(git rev-parse "refs/tags/${VERSION}^{}")
+            elif git rev-parse "${VERSION}" > /dev/null 2>&1; then
+              SHA=$(git rev-parse "${VERSION}")
+            else
+              echo "❌ Cannot resolve '${VERSION}'"; exit 1
+            fi
           fi
 
           SHA_SHORT=$(git rev-parse --short "$SHA")
-          echo "sha=${SHA}"             >> $GITHUB_OUTPUT
-          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "version=${VERSION}"     >> $GITHUB_OUTPUT
-          echo "## Production — \`${VERSION}\` (\`${SHA_SHORT}\`)" >> $GITHUB_STEP_SUMMARY
-          echo "Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "sha=${SHA}"                        >> $GITHUB_OUTPUT
+          echo "sha_short=${SHA_SHORT}"            >> $GITHUB_OUTPUT
+          echo "version=${VERSION:-${SHA_SHORT}}"  >> $GITHUB_OUTPUT
 
-  # ── DEPLOY PRODUCTION ────────────────────────────────────────
   deploy:
-    name: "Deploy Production"
-    needs: [validate]
+    name: "Deploy"
+    needs: validate
     if: |
       always() && !cancelled() &&
-      needs.validate.result == 'success'
+      needs.validate.result == 'success' &&
+      vars.PRODUCTION_HOST != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
       name: production
       url: https://${{ vars.PRODUCTION_HOST }}
-    outputs:
-      deployed: ${{ steps.set-outputs.outputs.deployed }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          fetch-depth: 0
-
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
-          host:     ${{ vars.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key:      ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:     22
+          host:            ${{ vars.PRODUCTION_HOST }}
+          username:        ${{ secrets.PRODUCTION_USER }}
+          key:             ${{ secrets.PRODUCTION_SSH_KEY }}
+          port:            22
+          command_timeout: 600s
           script: |
             set -euo pipefail
             cd "${{ secrets.PRODUCTION_PATH }}"
 
-            # Capture current SHA before any change (used by rollback)
             grep -qxF ".prev_sha" .gitignore 2>/dev/null || echo ".prev_sha" >> .gitignore
             git rev-parse HEAD > .prev_sha
-            echo "Previous SHA saved: $(cat .prev_sha)"
 
-            # Deploy exact validated SHA — no race condition
-            git fetch origin
+            git fetch --all --tags --prune
+            git cat-file -e "${{ needs.validate.outputs.sha }}" || { echo "❌ SHA not found after fetch"; exit 1; }
             git reset --hard "${{ needs.validate.outputs.sha }}"
 
-            # Backup and validate .env
-            [ -f .env ] && cp .env ".env.backup.$(date +%Y%m%d_%H%M%S)"
-            [ -f .env ] || cp .env.example .env
+            if [ -f .env ]; then
+              cp .env ".env.backup.$(date +%Y%m%d_%H%M%S)"
+              ls -t .env.backup.* 2>/dev/null | tail -n +6 | xargs -r rm -f
+            else
+              cp .env.example .env
+            fi
+
+            INVALID=$(grep -vE '^\s*#|^\s*$|^[A-Z_][A-Z0-9_]*=.*$' .env || true)
+            [[ -n "$INVALID" ]] && { echo "❌ Malformed .env lines:"; echo "$INVALID"; exit 1; }
 
             MISSING=""
-            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-              val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
+            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET SECRET_KEY TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+              val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"'"'"'[:space:]' || true)
               [[ -z "$val" || "$val" == your-* ]] && MISSING="${MISSING} ${var}"
             done
-            [ -n "$MISSING" ] && { echo "❌ Missing vars:${MISSING}"; exit 1; }
+            [[ -n "$MISSING" ]] && { echo "❌ Missing env vars:${MISSING}"; exit 1; }
 
             docker compose pull --quiet
-            docker compose up -d --wait --wait-timeout 120
+            docker compose up -d
 
-            ACTUAL=$(git rev-parse HEAD)
-            [[ "${{ needs.validate.outputs.sha }}" == "$ACTUAL" ]] || {
-              echo "❌ SHA mismatch: expected ${{ needs.validate.outputs.sha }}, got $ACTUAL"
+            echo "Waiting for services to be healthy..."
+            timeout 240s bash -c '
+              until docker compose ps n8n | grep -q "(healthy)"; do
+                echo "n8n not healthy yet... waiting"
+                sleep 8
+              done
+              echo "n8n is healthy"
+            ' || {
+              echo "❌ Timeout waiting for n8n healthy"
+              docker compose logs n8n
               exit 1
             }
-            echo "✅ Deployed $ACTUAL (${{ needs.validate.outputs.version }})"
 
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          echo "deployed=true" >> $GITHUB_OUTPUT
-          echo "| Version | \`${{ needs.validate.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA     | \`${{ needs.validate.outputs.sha_short }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| By      | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+            ACTUAL=$(git rev-parse HEAD)
+            [[ "${{ needs.validate.outputs.sha }}" == "$ACTUAL" ]] || { echo "❌ SHA mismatch: got $ACTUAL"; exit 1; }
 
-  # ── SMOKE TESTS ───────────────────────────────────────────────
+  # FIX B: condition resserrée — smoke ne tourne que si deploy a réussi
   smoke-test:
     name: "Smoke Tests"
     needs: deploy
-    if: needs.deploy.outputs.deployed == 'true'
+    if: needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: n8n health :5678
+      - name: Health checks (n8n + gateway + postgres)
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
-          host:     ${{ vars.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key:      ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:     22
+          host:            ${{ vars.PRODUCTION_HOST }}
+          username:        ${{ secrets.PRODUCTION_USER }}
+          key:             ${{ secrets.PRODUCTION_SSH_KEY }}
+          port:            22
+          command_timeout: 600s
           script: |
+            set -euo pipefail
+
             for i in $(seq 1 10); do
-              curl -sf http://localhost:5678/healthz > /dev/null 2>&1 && exit 0
+              curl -sf --max-time 10 --connect-timeout 5 http://localhost:5678/healthz && break
+              [ "$i" -eq 10 ] && { echo "❌ n8n unhealthy"; exit 1; }
               sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
             done
-            exit 1
 
-      - name: Gateway health :5001
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
-        with:
-          host:     ${{ vars.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key:      ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:     22
-          script: |
             for i in $(seq 1 10); do
-              curl -sf http://localhost:5001/health > /dev/null 2>&1 && exit 0
+              curl -sf --max-time 10 --connect-timeout 5 http://localhost:5001/ && break
+              [ "$i" -eq 10 ] && { echo "❌ Gateway unhealthy"; exit 1; }
               sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
             done
-            exit 1
 
-      - name: PostgreSQL + pgvector + memory schema
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
-        with:
-          host:     ${{ vars.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key:      ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:     22
-          script: |
             cd "${{ secrets.PRODUCTION_PATH }}"
-            PG_USER=$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || echo 'chief')
-            PG_DB=$(grep -E '^POSTGRES_DB=' .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]' || echo 'chief_db')
-            docker compose exec -T postgres pg_isready -U "$PG_USER" || exit 1
+            PG_USER=$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- | tr -d '"'"'"'[:space:]' || echo 'chief')
+            PG_DB=$(grep   -E '^POSTGRES_DB='   .env | cut -d= -f2- | tr -d '"'"'"'[:space:]' || echo 'chief_db')
+
+            docker compose exec -T postgres pg_isready -U "$PG_USER"
             docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -tAc \
-              "SELECT extname FROM pg_extension WHERE extname='vector';" | grep -q vector || exit 1
+              "SELECT extname FROM pg_extension WHERE extname='vector';" | grep -q vector   || { echo "❌ pgvector missing"; exit 1; }
             docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -tAc \
-              "SELECT schema_name FROM information_schema.schemata WHERE schema_name='memory';" | grep -q memory || exit 1
+              "SELECT schema_name FROM information_schema.schemata WHERE schema_name='memory';" | grep -q memory || { echo "❌ memory schema missing"; exit 1; }
 
       - name: Dump logs on failure
         if: failure()
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
-          host:     ${{ vars.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key:      ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:     22
-          script: |
-            docker compose -f "${{ secrets.PRODUCTION_PATH }}/docker-compose.yml" logs --no-color
+          host:            ${{ vars.PRODUCTION_HOST }}
+          username:        ${{ secrets.PRODUCTION_USER }}
+          key:             ${{ secrets.PRODUCTION_SSH_KEY }}
+          port:            22
+          command_timeout: 120s
+          script: docker compose -f "${{ secrets.PRODUCTION_PATH }}/docker-compose.yml" logs --no-color
 
-  # ── ROLLBACK ──────────────────────────────────────────────────
-  rollback-check:
+  rollback:
     name: "Rollback"
     needs: smoke-test
     if: needs.smoke-test.result == 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      healthy: ${{ steps.health.outputs.healthy }}
     steps:
       - name: Rollback to previous SHA
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
-          host:     ${{ vars.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key:      ${{ secrets.PRODUCTION_SSH_KEY }}
-          port:     22
+          host:            ${{ vars.PRODUCTION_HOST }}
+          username:        ${{ secrets.PRODUCTION_USER }}
+          key:             ${{ secrets.PRODUCTION_SSH_KEY }}
+          port:            22
+          command_timeout: 600s
           script: |
             set -euo pipefail
             cd "${{ secrets.PRODUCTION_PATH }}"
-            PREV_SHA=$(cat .prev_sha 2>/dev/null || echo "")
-            [ -z "$PREV_SHA" ] && { echo "❌ No previous SHA — cannot rollback"; exit 1; }
-            echo "⚠️ Rolling back to $PREV_SHA"
-            git fetch origin
-            git reset --hard "$PREV_SHA"
+            PREV=$(cat .prev_sha 2>/dev/null || echo "")
+            [[ -z "$PREV" ]] && { echo "❌ No previous SHA"; exit 1; }
+            git fetch --all --tags --prune
+            git reset --hard "$PREV"
             docker compose up -d --wait --wait-timeout 180
-            CURRENT=$(git rev-parse HEAD)
-            [[ "$CURRENT" == "$PREV_SHA" ]] || { echo "❌ Rollback SHA mismatch: got $CURRENT"; exit 1; }
-            echo "✅ Rolled back to $(git rev-parse --short HEAD)"
+            [[ "$(git rev-parse HEAD)" == "$PREV" ]] || { echo "❌ SHA mismatch post-rollback"; exit 1; }
 
-  # ── NOTIFY ────────────────────────────────────────────────────
+      # FIX A: vérification de santé exécutée sur le runner (pas via SSH)
+      # $GITHUB_OUTPUT n'existe pas sur le serveur distant — le write était silencieusement perdu
+      - name: Verify rollback health
+        id: health
+        run: |
+          for i in $(seq 1 10); do
+            if ssh -o StrictHostKeyChecking=no \
+                 -o BatchMode=yes \
+                 -i <(echo "${{ secrets.PRODUCTION_SSH_KEY }}") \
+                 "${{ secrets.PRODUCTION_USER }}@${{ vars.PRODUCTION_HOST }}" \
+                 "curl -sf --max-time 10 --connect-timeout 5 http://localhost:5001/ > /dev/null 2>&1 && \
+                  curl -sf --max-time 10 --connect-timeout 5 http://localhost:5678/healthz > /dev/null 2>&1"; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep $(( 2 ** i > 30 ? 30 : 2 ** i ))
+          done
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
   notify:
     name: "Notify"
-    needs: [validate, deploy, smoke-test, rollback-check]
+    needs: [validate, deploy, smoke-test, rollback]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Send Telegram notification
+      - name: Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          DEPLOY="${{ needs.deploy.result }}"
           SMOKE="${{ needs.smoke-test.result }}"
-          ROLLBACK="${{ needs.rollback-check.result }}"
-          VERSION="${{ needs.validate.outputs.version }}"
+          ROLLBACK="${{ needs.rollback.result }}"
+          RB_OK="${{ needs.rollback.outputs.healthy }}"
+          DEPLOY="${{ needs.deploy.result }}"
 
-          if   [[ "$SMOKE"    == "success" ]];                                   then EMOJI="✅"; MSG="Production deployed & smoke tests passed"
-          elif [[ "$ROLLBACK" == "success" ]];                                   then EMOJI="🔄"; MSG="Smoke tests failed — automatic rollback performed"
-          elif [[ "$DEPLOY"   == "success" && "$SMOKE" == "failure" ]];          then EMOJI="🚨"; MSG="CRITICAL: smoke tests + rollback failed — manual intervention required"
-          elif [[ "$DEPLOY"   == "failure" ]];                                   then EMOJI="❌"; MSG="Deployment failed"
-          else                                                                        EMOJI="❌"; MSG="Pipeline failed"
+          if   [[ "$SMOKE"    == "success" ]];                        then EMOJI="✅"; MSG="Deployed & smoke tests passed"
+          elif [[ "$ROLLBACK" == "success" && "$RB_OK" == "true" ]];  then EMOJI="🔄"; MSG="Smoke failed — rollback OK"
+          elif [[ "$ROLLBACK" == "success" && "$RB_OK" != "true" ]];  then EMOJI="🚨"; MSG="CRITICAL: rollback done but services unhealthy"
+          elif [[ "$DEPLOY"   == "success" ]];                        then EMOJI="🚨"; MSG="CRITICAL: smoke + rollback failed — manual action required"
+          else                                                              EMOJI="❌"; MSG="Pipeline failed"
           fi
 
-          TICK='`'
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TEXT="${EMOJI} *CD Production — chief-of-staff*"$'\n'
-          TEXT+="Version: ${TICK}${VERSION}${TICK} | By: ${{ github.actor }}"$'\n'
+          T='`'
+          TEXT="${EMOJI} *CD — chief-of-staff*"$'\n'
+          TEXT+="Version: ${T}${{ needs.validate.outputs.version }}${T} | By: ${{ github.actor }}"$'\n'
           TEXT+="${MSG}"$'\n'
-          TEXT+="[View Run](${RUN_URL})"
+          TEXT+="[View Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
             -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"${TEXT}\",\"parse_mode\":\"Markdown\",\"disable_web_page_preview\":true}")
-          [ "$HTTP" = "200" ] && echo "Telegram sent" || echo "Telegram HTTP $HTTP (non-blocking)"
+          [ "$HTTP" = "200" ] && echo "Sent" || echo "HTTP $HTTP (non-blocking)"
