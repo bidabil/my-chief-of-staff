@@ -225,6 +225,7 @@ jobs:
           printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)" >> .env
           printf 'TELEGRAM_BOT_TOKEN=ci-placeholder\nTELEGRAM_CHAT_ID=ci-placeholder\n' >> .env
           printf 'WEBHOOK_URL=http://localhost:5678\nCORS_ORIGINS=http://localhost:5678\n' >> .env
+          printf 'DOMAIN=localhost\nACME_EMAIL=ci@test.local\n' >> .env
 
       - name: Start stack
         run: |
