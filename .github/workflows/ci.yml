@@ -195,12 +195,12 @@ jobs:
           exit-code:      '1'
           ignore-unfixed: true
 
-      - uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13
         if: always()
         with:
           sarif_file: 'trivy-config.sarif'
 
-      - uses: bridgecrewio/checkov-action@2fd3901c8feb52417f27f0d9800259a106c1ec1e  # v12
+      - uses: bridgecrewio/checkov-action@0ce65fae06c148e349f955c3c35ad049c11e838c  # v12
         with:
           directory:     '.'
           framework:     'secrets'
