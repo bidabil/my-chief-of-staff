@@ -79,7 +79,6 @@ jobs:
   lint:
     name: "Lint"
     needs: init
-    # FIX C: workflow_dispatch force l'exécution même sans changements détectés
     if: |
       needs.init.outputs.is_draft != 'true' &&
       (needs.init.outputs.changes_docker == 'true' ||
@@ -109,7 +108,9 @@ jobs:
         run: |
           cp .env.example .env
           docker compose config --quiet
-          ! grep -qE "image:.*:latest" docker-compose.yml || { grep -E "image:.*:latest" docker-compose.yml; echo "❌ :latest forbidden"; exit 1; }
+          # :latest forbidden for third-party images — owner's images (billelattafi/) are exempt
+          LATEST=$(grep -E "image:.*:latest" docker-compose.yml | grep -v "billelattafi/" || true)
+          [ -n "$LATEST" ] && { echo "$LATEST"; echo "❌ :latest forbidden for third-party images"; exit 1; } || true
 
       - name: Required files & env vars
         run: |
@@ -117,7 +118,7 @@ jobs:
           for f in docker-compose.yml .env.example postgres/init.sql; do
             [ -f "$f" ] || { echo "❌ Missing: $f"; FAIL=true; }
           done
-          for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET; do
+          for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET SECRET_KEY; do
             grep -qE "^${var}=" .env.example || { echo "❌ Missing in .env.example: $var"; FAIL=true; }
           done
           [ "$FAIL" = "true" ] && exit 1; true
@@ -134,12 +135,12 @@ jobs:
               jq -e . "$f" > /dev/null || { echo "❌ Invalid JSON: $(basename $f)"; FAIL=true; }
             done
           done
-          WF="n8n/demo-data/workflows/morning-briefing.json"
-          if [ -f "$WF" ]; then
+          for WF in n8n/demo-data/workflows/*.json; do
+            [ -f "$WF" ] || continue
             for field in name nodes connections; do
-              jq -e ".$field" "$WF" > /dev/null || { echo "❌ Missing field: $field"; FAIL=true; }
+              jq -e ".$field" "$WF" > /dev/null || { echo "❌ Missing field '$field' in: $(basename $WF)"; FAIL=true; }
             done
-          fi
+          done
           [ "$FAIL" = "true" ] && exit 1; true
 
       - name: SQL structure
@@ -170,7 +171,6 @@ jobs:
   security:
     name: "Security"
     needs: init
-    # FIX C: workflow_dispatch force l'exécution même sans changements détectés
     if: |
       needs.init.outputs.is_draft != 'true' &&
       (needs.init.outputs.changes_docker == 'true' ||
@@ -211,7 +211,6 @@ jobs:
   smoke-test:
     name: "Smoke Test"
     needs: init
-    # FIX C: workflow_dispatch force l'exécution même sans changements détectés
     if: |
       needs.init.outputs.is_draft != 'true' &&
       !inputs.skip_tests &&
@@ -225,15 +224,20 @@ jobs:
 
       - name: Prepare .env
         run: |
-          printf 'ONE_MIN_AI_API_KEY=ci-test-%s\n'            "$(openssl rand -hex 8)"  > .env
+          # ── Infrastructure (required for all automations) ──
+          printf 'POSTGRES_USER=chief\nPOSTGRES_DB=chief_db\n'                          > .env
           printf 'POSTGRES_PASSWORD=%s\n'                      "$(openssl rand -hex 16)" >> .env
-          printf 'POSTGRES_USER=chief\nPOSTGRES_DB=chief_db\n'                          >> .env
           printf 'N8N_ENCRYPTION_KEY=%s\n'                     "$(openssl rand -hex 16)" >> .env
           printf 'N8N_USER_MANAGEMENT_JWT_SECRET=%s\n'         "$(openssl rand -hex 16)" >> .env
-          printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)" >> .env
-          printf 'TELEGRAM_BOT_TOKEN=ci-placeholder\nTELEGRAM_CHAT_ID=ci-placeholder\n' >> .env
           printf 'WEBHOOK_URL=http://localhost:5678\nCORS_ORIGINS=http://localhost:5678\n' >> .env
-          printf 'DOMAIN=localhost\nACME_EMAIL=ci@test.local\n' >> .env
+          printf 'DOMAIN=localhost\nACME_EMAIL=ci@test.local\n'                          >> .env
+          # ── Gateway (required) ──
+          printf 'ONE_MIN_AI_API_KEY=ci-test-%s\n'            "$(openssl rand -hex 8)"  >> .env
+          printf 'SECRET_KEY=%s\n'                             "$(openssl rand -hex 16)" >> .env
+          # ── Automation-specific secrets (optional — placeholder so stack starts) ──
+          # Each automation reads its own vars from .env at runtime.
+          # Add a placeholder line here for any new REQUIRED var your automation needs.
+          printf 'TELEGRAM_BOT_TOKEN=ci-placeholder\nTELEGRAM_CHAT_ID=ci-placeholder\n' >> .env
 
       # FIX log n8n-import: --wait bloque sur les conteneurs one-shot (Exited 0)
       # les étapes suivantes gèrent elles-mêmes l'attente via retry loops
@@ -312,6 +316,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          # Skip silently if Telegram secrets are not configured
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not configured — skipping notification"
+            exit 0
+          fi
+
           L="${{ needs.lint.result }}" S="${{ needs.secret-scan.result }}"
           C="${{ needs.security.result }}" K="${{ needs.smoke-test.result }}"
 

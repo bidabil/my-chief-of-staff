@@ -56,16 +56,16 @@ updates:
     groups:
       docker-base-images:
         patterns:
-          - "postgres*"
-          - "pgvector*"
-          - "n8nio*"
-          - "caddy*"
+          - "pgvector/pgvector*"       # pgvector/pgvector:pg16
+          - "prodrigestivill*"          # prodrigestivill/postgres-backup-local
+          - "n8nio*"                    # n8nio/n8n
+          - "caddy*"                    # caddy:2.x-alpine
         update-types:
           - "minor"
           - "patch"
       docker-gateway:
         patterns:
-          - "billelattafi*"
+          - "billelattafi*"             # billelattafi/1min-gateway
         update-types:
           - "minor"
           - "patch"
