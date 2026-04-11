@@ -36,7 +36,10 @@ jobs:
         id: version
         run: |
           LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          IFS='.' read -r MAJ MIN PAT <<< "${LAST#v}"
+          # Strip pre-release suffix (e.g. v1.0.0-rc1 → 1.0.0) before parsing
+          CLEAN=$(echo "${LAST#v}" | sed 's/[-+].*//')
+          IFS='.' read -r MAJ MIN PAT <<< "$CLEAN"
+          MAJ=${MAJ:-0}; MIN=${MIN:-0}; PAT=${PAT:-0}
           case "${{ inputs.bump }}" in
             major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;
             minor) MIN=$((MIN+1)); PAT=0 ;;
@@ -66,6 +69,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          # Skip silently if Telegram secrets are not configured
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not configured — skipping notification"
+            exit 0
+          fi
+
           TAG="${{ steps.version.outputs.tag }}"
           PREV="${{ steps.version.outputs.previous }}"
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$TAG"

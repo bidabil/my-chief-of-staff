@@ -98,12 +98,18 @@ jobs:
             INVALID=$(grep -vE '^\s*#|^\s*$|^[A-Z_][A-Z0-9_]*=.*$' .env || true)
             [[ -n "$INVALID" ]] && { echo "❌ Malformed .env lines:"; echo "$INVALID"; exit 1; }
 
+            # Infrastructure vars — required for all automations
             MISSING=""
-            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET SECRET_KEY TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-              val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"'"'"'[:space:]' || true)
+            for var in ONE_MIN_AI_API_KEY POSTGRES_PASSWORD N8N_ENCRYPTION_KEY N8N_USER_MANAGEMENT_JWT_SECRET SECRET_KEY; do
+              val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | sed "s/^['\"]//;s/['\"]$//" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
               [[ -z "$val" || "$val" == your-* ]] && MISSING="${MISSING} ${var}"
             done
-            [[ -n "$MISSING" ]] && { echo "❌ Missing env vars:${MISSING}"; exit 1; }
+            [[ -n "$MISSING" ]] && { echo "❌ Missing infrastructure env vars:${MISSING}"; exit 1; }
+            # Automation-specific vars — warn only (automation may be disabled)
+            for var in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+              val=$(grep -E "^${var}=" .env | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | sed "s/^['\"]//;s/['\"]$//" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+              [[ -z "$val" || "$val" == your-* ]] && echo "⚠️  Optional var not set: ${var}"
+            done
 
             docker compose pull --quiet
             docker compose up -d
@@ -235,6 +241,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          # Skip silently if Telegram secrets are not configured
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not configured — skipping notification"
+            exit 0
+          fi
+
           SMOKE="${{ needs.smoke-test.result }}"
           ROLLBACK="${{ needs.rollback.result }}"
           RB_OK="${{ needs.rollback.outputs.healthy }}"
